@@ -5,9 +5,12 @@ name: Build HRMS Image
 # GitHub Container Registry as ghcr.io/<owner>/frappe-hrms:v16.
 #
 # The Containerfile is the stock one from frappe/frappe_docker; this repo only
-# defines which apps go into the image. Note that the apps.json secret source
-# must live inside the build context (builder/), because buildx resolves
-# secret `src=` paths relative to the context.
+# defines which apps go into the image. Two things worth knowing:
+#  1. The apps.json secret source must live inside the build context (builder/),
+#     because buildx resolves secret `src=` paths relative to the context.
+#  2. CACHE_BUST is the workflow run id: secret contents are not part of Docker
+#     layer cache keys, so without it a re-run would silently reuse the previous
+#     (possibly app-less) `bench init` layer instead of fetching the apps again.
 
 on:
   workflow_dispatch:
@@ -60,7 +63,7 @@ jobs:
           build-args: |
             FRAPPE_PATH=https://github.com/frappe/frappe
             FRAPPE_BRANCH=version-16
-            CACHE_BUST=${{ github.sha }}
+            CACHE_BUST=${{ github.run_id }}
           secret-files: |
             apps_json=builder/.ci/apps.json
           platforms: linux/amd64
