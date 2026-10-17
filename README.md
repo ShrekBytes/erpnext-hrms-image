@@ -1,4 +1,4 @@
-# frappe-hrms-image
+# erpnext-hrms-image
 
 Builds a self-hosted Frappe image that includes:
 
@@ -13,8 +13,8 @@ so the image layout matches the official ones.
 ## Output
 
 ```
-ghcr.io/shrekbytes/frappe-hrms:v16
-ghcr.io/shrekbytes/frappe-hrms:latest
+ghcr.io/shrekbytes/erpnext-hrms:v16
+ghcr.io/shrekbytes/erpnext-hrms:latest
 ```
 
 Rebuilds run automatically on push to `main`, or manually via *Actions → Build
@@ -25,7 +25,7 @@ HRMS Image → Run workflow*.
 Point the compose file's Frappe services at the image:
 
 ```yaml
-image: ghcr.io/shrekbytes/frappe-hrms:v16
+image: ghcr.io/shrekbytes/erpnext-hrms:v16
 ```
 
 Then, after the stack is up, install the app on the site:

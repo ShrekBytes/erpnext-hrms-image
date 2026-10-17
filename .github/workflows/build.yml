@@ -2,7 +2,7 @@ name: Build HRMS Image
 
 # Builds a Frappe image that contains the apps listed in apps.json
 # (currently erpnext + hrms, both on the version-16 branches) and pushes it to
-# GitHub Container Registry as ghcr.io/<owner>/frappe-hrms:v16.
+# GitHub Container Registry as ghcr.io/<owner>/erpnext-hrms:v16.
 #
 # The Containerfile is the stock one from frappe/frappe_docker; this repo only
 # defines which apps go into the image. Two things worth knowing:
@@ -50,7 +50,7 @@ jobs:
           cp apps.json builder/.ci/apps.json
 
       - name: Resolve image name
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/frappe-hrms" >> "$GITHUB_ENV"
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/erpnext-hrms" >> "$GITHUB_ENV"
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v4
@@ -69,8 +69,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: ${{ env.IMAGE }}:v16
-          cache-from: type=gha,scope=frappe-hrms
-          cache-to: type=gha,mode=max,scope=frappe-hrms
+          cache-from: type=gha,scope=erpnext-hrms
+          cache-to: type=gha,mode=max,scope=erpnext-hrms
 
       - name: Verify apps are present in the image
         run: |
