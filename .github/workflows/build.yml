@@ -5,7 +5,9 @@ name: Build HRMS Image
 # GitHub Container Registry as ghcr.io/<owner>/frappe-hrms:v16.
 #
 # The Containerfile is the stock one from frappe/frappe_docker; this repo only
-# defines which apps go into the image.
+# defines which apps go into the image. Note that the apps.json secret source
+# must live inside the build context (builder/), because buildx resolves
+# secret `src=` paths relative to the context.
 
 on:
   workflow_dispatch:
@@ -39,20 +41,18 @@ jobs:
           ref: main
           path: builder
 
+      - name: Stage apps.json inside the build context
+        run: |
+          mkdir -p builder/.ci
+          cp apps.json builder/.ci/apps.json
+
       - name: Resolve image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/frappe-hrms" >> "$GITHUB_ENV"
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Login to GHCR
-        uses: docker/login-action@v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
+      - name: Build (load locally)
         uses: docker/build-push-action@v7
         with:
           context: builder
@@ -61,11 +61,33 @@ jobs:
             FRAPPE_PATH=https://github.com/frappe/frappe
             FRAPPE_BRANCH=version-16
           secrets: |
-            id=apps_json,src=apps.json
+            id=apps_json,src=builder/.ci/apps.json
           platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:v16
-            ${{ env.IMAGE }}:latest
+          load: true
+          tags: ${{ env.IMAGE }}:v16
           cache-from: type=gha,scope=frappe-hrms
           cache-to: type=gha,mode=max,scope=frappe-hrms
+
+      - name: Verify apps are present in the image
+        run: |
+          docker run --rm --entrypoint bash "${{ env.IMAGE }}:v16" -lc '
+            set -e
+            for app in frappe erpnext hrms; do
+              test -d "/home/frappe/frappe-bench/apps/$app" || { echo "missing app: $app"; exit 1; }
+            done
+            bench version
+            ls /home/frappe/frappe-bench/assets
+          '
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        run: |
+          docker tag "${{ env.IMAGE }}:v16" "${{ env.IMAGE }}:latest"
+          docker push "${{ env.IMAGE }}:v16"
+          docker push "${{ env.IMAGE }}:latest"
