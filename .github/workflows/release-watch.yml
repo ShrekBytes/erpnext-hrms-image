@@ -40,8 +40,8 @@ jobs:
           set -euo pipefail
           pinned_erpnext=$(jq -r '.[] | select(.url == "https://github.com/frappe/erpnext") | .branch' apps.json)
           pinned_hrms=$(jq -r '.[] | select(.url == "https://github.com/frappe/hrms") | .branch' apps.json)
-          latest_erpnext=$(gh api "repos/frappe/erpnext/tags?per_page=30" --jq '[.[].name | select(startswith("v16."))]' | sort -V | tail -1)
-          latest_hrms=$(gh api "repos/frappe/hrms/tags?per_page=30" --jq '[.[].name | select(startswith("v16."))]' | sort -V | tail -1)
+          latest_erpnext=$(gh api "repos/frappe/erpnext/tags?per_page=30" --jq '.[].name' | grep '^v16\.' | sort -V | tail -1)
+          latest_hrms=$(gh api "repos/frappe/hrms/tags?per_page=30" --jq '.[].name' | grep '^v16\.' | sort -V | tail -1)
 
           echo "erpnext: pinned $pinned_erpnext | latest release $latest_erpnext"
           echo "hrms:    pinned $pinned_hrms | latest release $latest_hrms"
