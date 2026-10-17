@@ -10,15 +10,37 @@ The app list lives in [`apps.json`](apps.json). The build uses the stock
 `images/layered/Containerfile` from [frappe/frappe_docker](https://github.com/frappe/frappe_docker),
 so the image layout matches the official ones.
 
-## Output
+## Tags
 
-```
-ghcr.io/shrekbytes/erpnext-hrms:v16
-ghcr.io/shrekbytes/erpnext-hrms:latest
+| Tag | Kind | Meaning |
+|---|---|---|
+| `:v16` | moving | Newest build of the `version-16` branches |
+| `:latest` | moving | Same image as `:v16` |
+| `:v<version>` | pin | ERPNext version in the image, e.g. `:v16.51.1` |
+| `:sha-<commit>` | pin | Workflow commit the image was built from |
+
+Pin a build in a compose file to freeze or roll back:
+
+```yaml
+image: ghcr.io/shrekbytes/erpnext-hrms:v16.51.1
 ```
 
-Rebuilds run automatically on push to `main`, or manually via *Actions → Build
-HRMS Image → Run workflow*.
+## Rebuilds
+
+- **Push to `main`** — when `apps.json` or the workflow changes.
+- **Weekly** — Mondays 03:00 UTC. Each run re-fetches the current `version-16`
+  branches of Frappe/ERPNext/HRMS, so upstream fixes land in the next build.
+  (GitHub pauses schedules after 60 days without repo activity; re-enable from
+  the Actions tab if that happens.)
+- **Manually** — *Actions → Build HRMS Image → Run workflow*.
+
+After pulling a newer image on a server, run the stack update and migrate:
+
+```bash
+podman compose -f <compose file> pull
+podman compose -f <compose file> up -d --no-build
+podman exec -u frappe <backend-container> bench --site <site> migrate
+```
 
 ## Usage (Podman, rootless)
 

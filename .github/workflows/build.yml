@@ -2,7 +2,19 @@ name: Build HRMS Image
 
 # Builds a Frappe image that contains the apps listed in apps.json
 # (currently erpnext + hrms, both on the version-16 branches) and pushes it to
-# GitHub Container Registry as ghcr.io/<owner>/erpnext-hrms:v16.
+# GitHub Container Registry.
+#
+# Tags pushed:
+#   :v16               moving  - newest build of the version-16 branches
+#   :latest            moving  - same image as :v16
+#   :v<erpnext ver>    pin     - e.g. v16.51.1, the ERPNext version in the image
+#   :sha-<commit>      pin     - the workflow commit this image was built from
+#                                (both pin tags are meant for freezing or
+#                                rollback in a compose file)
+#
+# Builds run on push to main, weekly (Monday 03:00 UTC - picks up whatever the
+# upstream version-16 branches contain by then), or manually via
+# *Actions -> Build HRMS Image -> Run workflow*.
 #
 # The Containerfile is the stock one from frappe/frappe_docker; this repo only
 # defines which apps go into the image. Two things worth knowing:
@@ -10,7 +22,7 @@ name: Build HRMS Image
 #     because buildx resolves secret `src=` paths relative to the context.
 #  2. CACHE_BUST is the workflow run id: secret contents are not part of Docker
 #     layer cache keys, so without it a re-run would silently reuse the previous
-#     (possibly app-less) `bench init` layer instead of fetching the apps again.
+#     `bench init` layer instead of fetching the apps again.
 
 on:
   workflow_dispatch:
@@ -19,6 +31,10 @@ on:
     paths:
       - "apps.json"
       - ".github/workflows/build.yml"
+  schedule:
+    # GitHub pauses schedules after 60 days without repository activity;
+    # re-enable from the Actions tab if the weekly builds ever stop.
+    - cron: "0 3 * * 1"
 
 permissions:
   contents: read
@@ -80,8 +96,30 @@ jobs:
               test -d "/home/frappe/frappe-bench/apps/$app" || { echo "missing app: $app"; exit 1; }
             done
             bench version
-            ls /home/frappe/frappe-bench/assets
           '
+
+      - name: Determine app versions and tag names
+        run: |
+          out=$(docker run --rm --entrypoint bash "${{ env.IMAGE }}:v16" -lc 'bench version')
+          echo "$out"
+          frappe=$(awk '$1=="frappe"{print $2}' <<<"$out")
+          erpnext=$(awk '$1=="erpnext"{print $2}' <<<"$out")
+          hrms=$(awk '$1=="hrms"{print $2}' <<<"$out")
+          if [[ "$erpnext" =~ ^[0-9]+\.[0-9]+ ]]; then
+            echo "VERSION_TAG=v${erpnext}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION_TAG=build-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+          fi
+          echo "SHA_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          {
+            echo "### Image contents"
+            echo ""
+            echo "| app | version |"
+            echo "|---|---|"
+            echo "| frappe | ${frappe:-unknown} |"
+            echo "| erpnext | ${erpnext:-unknown} |"
+            echo "| hrms | ${hrms:-unknown} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Login to GHCR
         uses: docker/login-action@v4.6.0
@@ -90,8 +128,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push
+      - name: Push tags
         run: |
+          set -e
           docker tag "${{ env.IMAGE }}:v16" "${{ env.IMAGE }}:latest"
-          docker push "${{ env.IMAGE }}:v16"
-          docker push "${{ env.IMAGE }}:latest"
+          docker tag "${{ env.IMAGE }}:v16" "${{ env.IMAGE }}:${{ env.VERSION_TAG }}"
+          docker tag "${{ env.IMAGE }}:v16" "${{ env.IMAGE }}:${{ env.SHA_TAG }}"
+          for t in v16 latest "${{ env.VERSION_TAG }}" "${{ env.SHA_TAG }}"; do
+            docker push "${{ env.IMAGE }}:$t"
+          done
+          {
+            echo ""
+            echo "### Tags pushed"
+            echo ""
+            echo "- \`${{ env.IMAGE }}:v16\` (moving)"
+            echo "- \`${{ env.IMAGE }}:latest\` (moving)"
+            echo "- \`${{ env.IMAGE }}:${{ env.VERSION_TAG }}\` (pin)"
+            echo "- \`${{ env.IMAGE }}:${{ env.SHA_TAG }}\` (pin)"
+          } >> "$GITHUB_STEP_SUMMARY"
