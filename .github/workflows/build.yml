@@ -61,8 +61,8 @@ jobs:
             FRAPPE_PATH=https://github.com/frappe/frappe
             FRAPPE_BRANCH=version-16
             CACHE_BUST=${{ github.sha }}
-          secrets: |
-            id=apps_json,src=builder/.ci/apps.json
+          secret-files: |
+            apps_json=builder/.ci/apps.json
           platforms: linux/amd64
           load: true
           tags: ${{ env.IMAGE }}:v16
