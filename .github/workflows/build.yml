@@ -12,9 +12,9 @@ name: Build HRMS Image
 #                                (both pin tags are meant for freezing or
 #                                rollback in a compose file)
 #
-# Builds run on push to main, weekly (Monday 03:00 UTC - picks up whatever the
-# upstream version-16 branches contain by then), or manually via
-# *Actions -> Build HRMS Image -> Run workflow*.
+# Builds run when apps.json changes - either committed by *Watch for Stable
+# Releases* (which only ever pins *released* tags, never branch heads) or by
+# hand - and manually via *Actions -> Build HRMS Image -> Run workflow*.
 #
 # The Containerfile is the stock one from frappe/frappe_docker; this repo only
 # defines which apps go into the image. Two things worth knowing:
@@ -31,10 +31,6 @@ on:
     paths:
       - "apps.json"
       - ".github/workflows/build.yml"
-  schedule:
-    # GitHub pauses schedules after 60 days without repository activity;
-    # re-enable from the Actions tab if the weekly builds ever stop.
-    - cron: "0 3 * * 1"
 
 permissions:
   contents: read

@@ -1,20 +1,47 @@
 # erpnext-hrms-image
 
-Builds a self-hosted Frappe image that includes:
+Builds a self-hosted Frappe image with:
 
-- [frappe](https://github.com/frappe/frappe) (framework, `version-16`)
-- [erpnext](https://github.com/frappe/erpnext) (`version-16`)
-- [hrms](https://github.com/frappe/hrms) — Frappe HR, provides payroll (`version-16`)
+- [erpnext](https://github.com/frappe/erpnext) — the ERPNext business modules
+- [hrms](https://github.com/frappe/hrms) — Frappe HR, payroll and attendance
+- [frappe](https://github.com/frappe/frappe) — the framework, taken from the official `frappe/base` and `frappe/build` images
 
-The app list lives in [`apps.json`](apps.json). The build uses the stock
-`images/layered/Containerfile` from [frappe/frappe_docker](https://github.com/frappe/frappe_docker),
-so the image layout matches the official ones.
+The build uses the stock `images/layered/Containerfile` from
+[frappe/frappe_docker](https://github.com/frappe/frappe_docker), so the image
+layout matches the official ones.
+
+## Stable release policy
+
+ERPNext and HRMS are pinned to **release tags** in [`apps.json`](apps.json) —
+branch heads are never built:
+
+```json
+[
+  { "url": "https://github.com/frappe/erpnext", "branch": "v16.51.1" },
+  { "url": "https://github.com/frappe/hrms", "branch": "v16.51.0" }
+]
+```
+
+The *Watch for Stable Releases* workflow checks the upstream release tags daily
+(04:00 UTC). Only when a newer v16 release exists does it bump these pins and
+commit — and that commit is what triggers a build. Every published image
+therefore contains released, tagged code, never an unreleased or hotfix commit.
+
+If a build fails its verification step, nothing is published and the existing
+tags keep pointing at the last good image.
+
+The framework is deliberately **not** pinned to a patch tag: the Containerfile
+uses one ref for both `frappe/build:<ref>` and `frappe/base:<ref>`, and those
+images do not share every patch tag (`base` publishes `v16.52.0` while `build`
+has `v16.51.1`), so a pin would hold the framework backwards.
+`frappe/base:version-16` / `frappe/build:version-16` are Frappe's own released
+images from the stable `version-16` branch.
 
 ## Tags
 
 | Tag | Kind | Meaning |
 |---|---|---|
-| `:v16` | moving | Newest build of the `version-16` branches |
+| `:v16` | moving | Newest verified build |
 | `:latest` | moving | Same image as `:v16` |
 | `:v<version>` | pin | ERPNext version in the image, e.g. `:v16.51.1` |
 | `:sha-<commit>` | pin | Workflow commit the image was built from |
@@ -27,14 +54,14 @@ image: ghcr.io/shrekbytes/erpnext-hrms:v16.51.1
 
 ## Rebuilds
 
-- **Push to `main`** — when `apps.json` or the workflow changes.
-- **Weekly** — Mondays 03:00 UTC. Each run re-fetches the current `version-16`
-  branches of Frappe/ERPNext/HRMS, so upstream fixes land in the next build.
-  (GitHub pauses schedules after 60 days without repo activity; re-enable from
-  the Actions tab if that happens.)
-- **Manually** — *Actions → Build HRMS Image → Run workflow*.
+- **Automatic** — only when *Watch for Stable Releases* finds a newer ERPNext or
+  HRMS release.
+- **Manual** — *Actions → Build HRMS Image → Run workflow* rebuilds the pinned
+  versions; editing `apps.json` yourself also triggers a build.
+- Every build verifies that `frappe`, `erpnext` and `hrms` are present before it
+  pushes anything.
 
-After pulling a newer image on a server, run the stack update and migrate:
+Deploying an update to a server is deliberately a manual step:
 
 ```bash
 podman compose -f <compose file> pull
