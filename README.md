@@ -17,25 +17,34 @@ branch heads are never built:
 
 ```json
 [
-  { "url": "https://github.com/frappe/erpnext", "branch": "v16.51.1" },
-  { "url": "https://github.com/frappe/hrms", "branch": "v16.51.0" }
+  { "url": "https://github.com/frappe/erpnext", "branch": "v16.54.0" },
+  { "url": "https://github.com/frappe/hrms", "branch": "v16.53.2" }
 ]
 ```
 
-The *Watch for Stable Releases* workflow checks the upstream release tags daily
-(04:00 UTC). Only when a newer v16 release exists does it bump these pins and
-commit — and that commit is what triggers a build. Every published image
-therefore contains released, tagged code, never an unreleased or hotfix commit.
+The *Watch for Stable Releases* workflow checks the upstream tags daily
+(04:00 UTC), considering only stable `vMAJOR.MINOR.PATCH` v16 tags (no beta/rc).
+When a newer release exists it bumps these pins, commits, and **dispatches the
+build explicitly** (a push made with the default `GITHUB_TOKEN` does not trigger
+other workflows, so the dispatch is required).
 
-If a build fails its verification step, nothing is published and the existing
-tags keep pointing at the last good image.
+Before anything is published, the build runs
+[`ci/integration-test.sh`](ci/integration-test.sh): it starts MariaDB + Redis,
+creates a throwaway site with `erpnext` and `hrms` installed, runs
+`bench migrate` and `bench doctor`. If that fails, nothing is pushed and the
+existing tags keep pointing at the last good image.
 
-The framework is deliberately **not** pinned to a patch tag: the Containerfile
-uses one ref for both `frappe/build:<ref>` and `frappe/base:<ref>`, and those
-images do not share every patch tag (`base` publishes `v16.52.0` while `build`
-has `v16.51.1`), so a pin would hold the framework backwards.
-`frappe/base:version-16` / `frappe/build:version-16` are Frappe's own released
-images from the stable `version-16` branch.
+### What is and isn't pinned
+
+| Component | Pinned? |
+|---|---|
+| `erpnext`, `hrms` | yes — release tags in `apps.json` |
+| `frappe_docker` build files | yes — commit SHA in `build.yml` |
+| GitHub Actions | yes — full commit SHAs (Dependabot keeps them current) |
+| `frappe` framework + `frappe/base` / `frappe/build` images | **no** — they follow `version-16`. The upstream Containerfile uses one ref for both images and they don't share every patch tag, so a patch pin would hold the framework back. The resulting framework version is recorded in every run summary. |
+
+So rebuilding the same `apps.json` can pick up newer framework/base-image
+changes. The only truly immutable reference to a build is its **digest**.
 
 ## Tags
 
@@ -43,46 +52,34 @@ images from the stable `version-16` branch.
 |---|---|---|
 | `:v16` | moving | Newest verified build |
 | `:latest` | moving | Same image as `:v16` |
-| `:v<version>` | pin | ERPNext version in the image, e.g. `:v16.51.1` |
-| `:sha-<commit>` | pin | Workflow commit the image was built from |
+| `:erpnext-vX-hrms-vY` | pin | Both app versions, e.g. `:erpnext-v16.54.0-hrms-v16.53.2` |
+| `:build-<run id>-<attempt>` | pin | Unique per workflow run, never reused |
 
-Pin a build in a compose file to freeze or roll back:
-
-```yaml
-image: ghcr.io/shrekbytes/erpnext-hrms:v16.51.1
-```
+**Production should deploy by digest.** Every run summary prints a ready-to-paste
+line (`ERPNEXT_IMAGE=ghcr.io/shrekbytes/erpnext-hrms@sha256:...`). Moving tags
+(`:v16`, `:latest`) are for experiments only.
 
 ## Rebuilds
 
-- **Automatic** — only when *Watch for Stable Releases* finds a newer ERPNext or
-  HRMS release.
-- **Manual** — *Actions → Build HRMS Image → Run workflow* rebuilds the pinned
-  versions; editing `apps.json` yourself also triggers a build.
-- Every build verifies that `frappe`, `erpnext` and `hrms` are present before it
-  pushes anything.
+- **Automatic** — *Watch for Stable Releases* finds a newer ERPNext or HRMS release.
+- **Manual** — *Actions → Build HRMS Image → Run workflow*, or edit `apps.json`.
 
-Deploying an update to a server is deliberately a manual step:
+Deploying an update to a server is deliberately manual. The deployment folder
+(compose file, `office-up.sh`, `office-upgrade.sh`) lives outside this repo; the
+upgrade procedure is: **backup → pin new digest → stop app services → `bench
+migrate` with the new image → start**.
 
-```bash
-podman compose -f <compose file> pull
-podman compose -f <compose file> up -d --no-build
-podman exec -u frappe <backend-container> bench --site <site> migrate
-```
+## Running with Podman (rootless)
 
-## Usage (Podman, rootless)
-
-Point the compose file's Frappe services at the image:
+This repo only builds the image. Point your compose file at the digest:
 
 ```yaml
-image: ghcr.io/shrekbytes/erpnext-hrms:v16
+image: ghcr.io/shrekbytes/erpnext-hrms@sha256:<digest from the run summary>
 ```
 
-Then, after the stack is up, install the app on the site:
-
-```bash
-podman exec -u frappe <backend-container> bench --site <site> install-app hrms
-podman exec -u frappe <backend-container> bench --site <site> migrate
-```
+Tested with Podman 6.1 using Docker Compose 5.x as the `podman compose`
+provider (`systemctl --user enable --now podman.socket` required). Note
+`podman compose` delegates to whichever provider is installed.
 
 `ghcr.io` pulls need no login because the package inherits this public
 repository's visibility.

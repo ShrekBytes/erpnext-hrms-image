@@ -3,8 +3,9 @@ name: Watch for Stable Releases
 # Stable-only policy: apps.json pins ERPNext and HRMS to *release tags* - branch
 # heads are never built. This job is the only thing that moves those pins: it
 # polls the upstream release tags daily and, when a newer v16 release exists,
-# bumps apps.json and commits. That commit triggers *Build HRMS Image*, which
-# verifies the apps before publishing anything.
+# bumps apps.json, commits, and dispatches *Build HRMS Image* explicitly (a push
+# made with GITHUB_TOKEN never triggers other workflows by itself). The build
+# runs an integration test before publishing anything.
 #
 # If a build fails its verification, the previously published tags stay valid,
 # so a bad bump never reaches a server.
@@ -18,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: write   # needed to dispatch build.yml
 
 concurrency:
   group: release-watch
@@ -32,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Compare pinned versions with upstream releases
         id: check
@@ -40,8 +42,16 @@ jobs:
           set -euo pipefail
           pinned_erpnext=$(jq -r '.[] | select(.url == "https://github.com/frappe/erpnext") | .branch' apps.json)
           pinned_hrms=$(jq -r '.[] | select(.url == "https://github.com/frappe/hrms") | .branch' apps.json)
-          latest_erpnext=$(gh api "repos/frappe/erpnext/tags?per_page=30" --jq '.[].name' | grep '^v16\.' | sort -V | tail -1)
-          latest_hrms=$(gh api "repos/frappe/hrms/tags?per_page=30" --jq '.[].name' | grep '^v16\.' | sort -V | tail -1)
+          latest_tag() { # stable vMAJOR.MINOR.PATCH only: no beta/rc, all pages
+            gh api --paginate "repos/frappe/$1/tags?per_page=100" --jq '.[].name' |
+              grep -E '^v16\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+          }
+          latest_erpnext=$(latest_tag erpnext)
+          latest_hrms=$(latest_tag hrms)
+          if [ -z "$latest_erpnext" ] || [ -z "$latest_hrms" ]; then
+            echo "::error::could not determine latest stable v16 tags (erpnext='$latest_erpnext' hrms='$latest_hrms')"
+            exit 1
+          fi
 
           echo "erpnext: pinned $pinned_erpnext | latest release $latest_erpnext"
           echo "hrms:    pinned $pinned_hrms | latest release $latest_hrms"
@@ -71,10 +81,11 @@ jobs:
 
       - name: Bump pins to the newer releases
         if: steps.check.outputs.update == 'true'
+        env:
+          new_erpnext: ${{ steps.check.outputs.erpnext }}
+          new_hrms: ${{ steps.check.outputs.hrms }}
         run: |
           set -euo pipefail
-          new_erpnext="${{ steps.check.outputs.erpnext }}"
-          new_hrms="${{ steps.check.outputs.hrms }}"
           jq --arg e "$new_erpnext" --arg h "$new_hrms" \
             'map(if .url == "https://github.com/frappe/erpnext" then .branch = $e
                  elif .url == "https://github.com/frappe/hrms" then .branch = $h
@@ -85,7 +96,8 @@ jobs:
           git add apps.json
           git commit -m "chore(apps): stable bump to erpnext $new_erpnext, hrms $new_hrms"
           git push
-          echo "Pins bumped. *Build HRMS Image* will now build and verify this commit." >> "$GITHUB_STEP_SUMMARY"
+          gh workflow run build.yml --ref main
+          echo "Pins bumped. *Build HRMS Image* was dispatched to build and test this commit." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Already current
         if: steps.check.outputs.update == 'false'

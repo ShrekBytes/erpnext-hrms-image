@@ -5,16 +5,17 @@ name: Build HRMS Image
 # GitHub Container Registry.
 #
 # Tags pushed:
-#   :v16               moving  - newest build of the version-16 branches
-#   :latest            moving  - same image as :v16
-#   :v<erpnext ver>    pin     - e.g. v16.51.1, the ERPNext version in the image
-#   :sha-<commit>      pin     - the workflow commit this image was built from
-#                                (both pin tags are meant for freezing or
-#                                rollback in a compose file)
+#   :v16                          moving - newest verified build
+#   :latest                       moving - same image as :v16
+#   :erpnext-vX-hrms-vY           pin    - names BOTH app versions in the image
+#   :build-<run id>-<attempt>     pin    - unique per workflow run, never reused
+# For production, deploy by digest (printed in the run summary), not by tag.
 #
-# Builds run when apps.json changes - either committed by *Watch for Stable
-# Releases* (which only ever pins *released* tags, never branch heads) or by
-# hand - and manually via *Actions -> Build HRMS Image -> Run workflow*.
+# Builds run when apps.json is changed by hand, when *Watch for Stable Releases*
+# dispatches this workflow after bumping the pins (a push made with GITHUB_TOKEN
+# does not trigger workflows, so the watcher dispatches explicitly), and
+# manually via *Actions -> Build HRMS Image -> Run workflow*.
+# Nothing is pushed unless the integration test (ci/integration-test.sh) passes.
 #
 # The Containerfile is the stock one from frappe/frappe_docker; this repo only
 # defines which apps go into the image. Two things worth knowing:
@@ -47,13 +48,15 @@ jobs:
 
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Checkout frappe_docker (builder)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: frappe/frappe_docker
-          ref: main
+          # Pinned for reproducible builds. To update: bump this SHA, review
+          # upstream's images/layered/Containerfile diff, let CI test it.
+          ref: 85ad653360e4670c2e885c4283d293e7b9efeda9
           path: builder
 
       - name: Stage apps.json inside the build context
@@ -65,10 +68,10 @@ jobs:
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/erpnext-hrms" >> "$GITHUB_ENV"
 
       - name: Setup Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build (load locally)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: builder
           file: builder/images/layered/Containerfile
@@ -84,16 +87,6 @@ jobs:
           cache-from: type=gha,scope=erpnext-hrms
           cache-to: type=gha,mode=max,scope=erpnext-hrms
 
-      - name: Verify apps are present in the image
-        run: |
-          docker run --rm --entrypoint bash "${{ env.IMAGE }}:v16" -lc '
-            set -e
-            for app in frappe erpnext hrms; do
-              test -d "/home/frappe/frappe-bench/apps/$app" || { echo "missing app: $app"; exit 1; }
-            done
-            bench version
-          '
-
       - name: Determine app versions and tag names
         run: |
           out=$(docker run --rm --entrypoint bash "${{ env.IMAGE }}:v16" -lc 'bench version')
@@ -101,24 +94,26 @@ jobs:
           frappe=$(awk '$1=="frappe"{print $2}' <<<"$out")
           erpnext=$(awk '$1=="erpnext"{print $2}' <<<"$out")
           hrms=$(awk '$1=="hrms"{print $2}' <<<"$out")
-          if [[ "$erpnext" =~ ^[0-9]+\.[0-9]+ ]]; then
-            echo "VERSION_TAG=v${erpnext}" >> "$GITHUB_ENV"
-          else
-            echo "VERSION_TAG=build-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
-          fi
-          echo "SHA_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          for v in "$frappe" "$erpnext" "$hrms"; do
+            [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "could not read app versions from image"; exit 1; }
+          done
+          echo "VERSION_TAG=erpnext-v${erpnext}-hrms-v${hrms}" >> "$GITHUB_ENV"
+          echo "BUILD_TAG=build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
           {
             echo "### Image contents"
             echo ""
             echo "| app | version |"
             echo "|---|---|"
-            echo "| frappe | ${frappe:-unknown} |"
-            echo "| erpnext | ${erpnext:-unknown} |"
-            echo "| hrms | ${hrms:-unknown} |"
+            echo "| frappe | ${frappe} |"
+            echo "| erpnext | ${erpnext} |"
+            echo "| hrms | ${hrms} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Integration test (erpnext + hrms on a real site, migrate, doctor)
+        run: ci/integration-test.sh "${{ env.IMAGE }}:v16"
+
       - name: Login to GHCR
-        uses: docker/login-action@v4.6.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -126,19 +121,24 @@ jobs:
 
       - name: Push tags
         run: |
-          set -e
-          docker tag "${{ env.IMAGE }}:v16" "${{ env.IMAGE }}:latest"
-          docker tag "${{ env.IMAGE }}:v16" "${{ env.IMAGE }}:${{ env.VERSION_TAG }}"
-          docker tag "${{ env.IMAGE }}:v16" "${{ env.IMAGE }}:${{ env.SHA_TAG }}"
-          for t in v16 latest "${{ env.VERSION_TAG }}" "${{ env.SHA_TAG }}"; do
-            docker push "${{ env.IMAGE }}:$t"
+          set -euo pipefail
+          for t in latest "${VERSION_TAG}" "${BUILD_TAG}"; do
+            docker tag "${IMAGE}:v16" "${IMAGE}:$t"
           done
+          for t in v16 latest "${VERSION_TAG}" "${BUILD_TAG}"; do
+            docker push "${IMAGE}:$t"
+          done
+          digest=$(docker image inspect "${IMAGE}:v16" --format '{{index .RepoDigests 0}}')
           {
             echo ""
             echo "### Tags pushed"
             echo ""
-            echo "- \`${{ env.IMAGE }}:v16\` (moving)"
-            echo "- \`${{ env.IMAGE }}:latest\` (moving)"
-            echo "- \`${{ env.IMAGE }}:${{ env.VERSION_TAG }}\` (pin)"
-            echo "- \`${{ env.IMAGE }}:${{ env.SHA_TAG }}\` (pin)"
+            echo "- \`${IMAGE}:v16\` (moving)"
+            echo "- \`${IMAGE}:latest\` (moving)"
+            echo "- \`${IMAGE}:${VERSION_TAG}\` (pin)"
+            echo "- \`${IMAGE}:${BUILD_TAG}\` (pin)"
+            echo ""
+            echo "### Deploy by digest (production)"
+            echo ""
+            echo "\`ERPNEXT_IMAGE=${digest}\`"
           } >> "$GITHUB_STEP_SUMMARY"
